@@ -1,0 +1,161 @@
+trigger: none
+
+schedules:
+  - cron: "0 2 * * 6"  # Runs every Saturday at 2 AM UTC (Friday 9 PM EST)
+    displayName: "Weekly Theme Sync"
+    branches:
+      include:
+        - main
+    always: true
+
+variables:
+  THEME_NAME: $(THEME_NAME)
+  HS_PAT: $(HUBSPOT_PERSONAL_ACCESS_KEY)
+
+stages:
+  - stage: SaveToThemeDev
+    displayName: Save to `theme-dev` branch
+    jobs:
+      - job: FetchTheme
+        displayName: Fetch theme and commit to theme-dev
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - checkout: none
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Install Node.js'
+
+          - powershell: |
+              npm install -g @hubspot/cli
+
+              # HubSpot Auth
+              hs auth personalaccesskey --personal-access-key "$env:HS_PAT"
+
+              # Clone repo and checkout branch
+              git clone https://$(System.AccessToken)@dev.azure.com/$(System.CollectionUri.TrimEnd('/'))/$(System.TeamProject)/_git/$(Build.Repository.Name) repo
+              cd repo
+              git checkout -b theme-dev || git checkout theme-dev
+
+              # Fetch theme from HubSpot
+              hs fetch "$env:THEME_NAME" ./themes/"$env:THEME_NAME"
+
+              git config user.name "AzureDevOps"
+              git config user.email "devops@azure.com"
+              git add .
+              git commit -m "Weekly automated sync for theme '$env:THEME_NAME' [theme-dev]"
+              git push origin theme-dev
+            env:
+              HS_PAT: $(HUBSPOT_PERSONAL_ACCESS_KEY)
+              THEME_NAME: $(THEME_NAME)
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - stage: SaveToThemeTest
+    displayName: Save to `theme-test` branch
+    dependsOn: SaveToThemeDev
+    jobs:
+      - job: FetchTheme
+        displayName: Fetch theme and commit to theme-test
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - checkout: none
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Install Node.js'
+
+          - powershell: |
+              npm install -g @hubspot/cli
+              hs auth personalaccesskey --personal-access-key "$env:HS_PAT"
+
+              git clone https://$(System.AccessToken)@dev.azure.com/$(System.CollectionUri.TrimEnd('/'))/$(System.TeamProject)/_git/$(Build.Repository.Name) repo
+              cd repo
+              git checkout -b theme-test || git checkout theme-test
+
+              hs fetch "$env:THEME_NAME" ./themes/"$env:THEME_NAME"
+
+              git config user.name "AzureDevOps"
+              git config user.email "devops@azure.com"
+              git add .
+              git commit -m "Weekly automated sync for theme '$env:THEME_NAME' [theme-test]"
+              git push origin theme-test
+            env:
+              HS_PAT: $(HUBSPOT_PERSONAL_ACCESS_KEY)
+              THEME_NAME: $(THEME_NAME)
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - stage: SaveToThemeStage
+    displayName: Save to `theme-stage` branch
+    dependsOn: [SaveToThemeTest]
+    jobs:
+      - job: FetchTheme
+        displayName: Fetch theme and commit to theme-stage
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - checkout: none
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Install Node.js'
+
+          - powershell: |
+              npm install -g @hubspot/cli
+              hs auth personalaccesskey --personal-access-key "$env:HS_PAT"
+
+              git clone https://$(System.AccessToken)@dev.azure.com/$(System.CollectionUri.TrimEnd('/'))/$(System.TeamProject)/_git/$(Build.Repository.Name) repo
+              cd repo
+              git checkout -b theme-stage || git checkout theme-stage
+
+              hs fetch "$env:THEME_NAME" ./themes/"$env:THEME_NAME"
+
+              git config user.name "AzureDevOps"
+              git config user.email "devops@azure.com"
+              git add .
+              git commit -m "Weekly automated sync for theme '$env:THEME_NAME' [theme-stage]"
+              git push origin theme-stage
+            env:
+              HS_PAT: $(HUBSPOT_PERSONAL_ACCESS_KEY)
+              THEME_NAME: $(THEME_NAME)
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+  - stage: SaveToThemeProd
+    displayName: Save to `theme-prod` branch
+    dependsOn: SaveToThemeStage
+    jobs:
+      - job: FetchTheme
+        displayName: Fetch theme and commit to theme-prod
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - checkout: none
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Install Node.js'
+
+          - powershell: |
+              npm install -g @hubspot/cli
+              hs auth personalaccesskey --personal-access-key "$env:HS_PAT"
+
+              git clone https://$(System.AccessToken)@dev.azure.com/$(System.CollectionUri.TrimEnd('/'))/$(System.TeamProject)/_git/$(Build.Repository.Name) repo
+              cd repo
+              git checkout -b theme-prod || git checkout theme-prod
+
+              hs fetch "$env:THEME_NAME" ./themes/"$env:THEME_NAME"
+
+              git config user.name "AzureDevOps"
+              git config user.email "devops@azure.com"
+              git add .
+              git commit -m "Weekly automated sync for theme '$env:THEME_NAME' [theme-prod]"
+              git push origin theme-prod
+            env:
+              HS_PAT: $(HUBSPOT_PERSONAL_ACCESS_KEY)
+              THEME_NAME: $(THEME_NAME)
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
