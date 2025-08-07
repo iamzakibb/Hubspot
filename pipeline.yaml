@@ -16,7 +16,6 @@ stages:
         steps:
           - checkout: none
 
-          # Install Node.js for npm
           - task: NodeTool@0
             displayName: Install Node.js 20.x
             inputs:
@@ -31,7 +30,6 @@ stages:
                 Import-Module powershell-yaml
                 $WORKDIR = Join-Path $env:BUILD_SOURCESDIRECTORY 'temp-repo'
 
-                # list your three themes here
                 $themes = @(
                   'Code Ninja - Marketing Website',
                   'DEV',
@@ -45,20 +43,27 @@ stages:
                   $safeName = $safeName.Trim('-')
                   $branchName = "theme-$safeName"
 
-                  # Generate safe folder name by replacing slashes and illegal path characters with underscores
+                  # Generate safe folder name with underscores
                   $folderSafeName = $themeName -replace '[\/:*?"<>|]', '_' -replace '\s+', '_' -replace '_+', '_'
 
-                  # Clone the repo fresh
-                  if (Test-Path $WORKDIR) { Remove-Item -Recurse -Force $WORKDIR }
+                  # Clean and clone fresh
+                  if (Test-Path $WORKDIR) {
+                    Set-Location $env:TEMP
+                    Remove-Item -Recurse -Force $WORKDIR
+                  }
                   git clone $env:REPO_URL $WORKDIR
-                  Set-Location $WORKDIR
+                  Push-Location $WORKDIR
 
                   git checkout -B $branchName
 
-                  # install and configure HubSpot CLI
+                  # Setup HubSpot CLI
                   npm install -g @hubspot/cli
+                  Write-Host "Installed HubSpot CLI"
                   $cfgDir = Join-Path $env:USERPROFILE '.hubspotcli'
-                  if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force > $null }
+                  if (-not (Test-Path $cfgDir)) {
+                    New-Item -ItemType Directory -Path $cfgDir -Force > $null
+                  }
+                  $cfgPath = Join-Path $cfgDir 'hubspot.config.yml'
                   $cfg = @{
                     defaultPortal = $env:HUBSPOT_PORTAL_ID
                     portals       = @(@{
@@ -67,23 +72,29 @@ stages:
                       personalAccessKey  = $env:HUBSPOT_PAT
                     })
                   }
-                  $cfg | ConvertTo-Yaml | Out-File (Join-Path $cfgDir 'hubspot.config.yml') -Encoding utf8
+                  $cfg | ConvertTo-Yaml | Out-File $cfgPath -Encoding utf8 -Force
+                  Start-Sleep -Seconds 2
 
-                  # fetch theme into themes/<SafeFolderName>
+                  # Fetch the theme
                   $themesDir = Join-Path $WORKDIR "themes"
                   $dest = Join-Path $themesDir $folderSafeName
                   $parent = Split-Path -Path $dest -Parent
-
                   if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force > $null }
-                  hs fetch $themeName $dest --overwrite
 
-                  # commit & push if needed
+                  hs fetch "$themeName" "$dest" --overwrite
+                  if (-not (Test-Path $dest)) {
+                    Write-Error "Fetch failed or theme '$themeName' not found at $dest. Skipping."
+                    Pop-Location
+                    continue
+                  }
+
+                  # Commit and push
                   git add "themes\$folderSafeName"
                   if (-not (git diff --cached --quiet)) {
                     git config user.name  'AutomatedBuild'
                     git config user.email 'build@yourdomain.com'
-                    git commit -m "Sync HubSpot theme '$themeName' → $branch"
-                    git push origin "HEAD:$branch"
+                    git commit -m "Sync HubSpot theme '$themeName' → $branchName"
+                    git push origin "HEAD:$branchName"
                   } else {
                     Write-Host "No changes for '$themeName'."
                   }
