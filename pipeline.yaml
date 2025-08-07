@@ -1,0 +1,96 @@
+trigger: none
+
+variables:
+  HUBSPOT_PAT:       $(HUBSPOT_PERSONAL_ACCESS_KEY)
+  HUBSPOT_PORTAL_ID: "39646145"
+  REPO_URL:          "https://$(System.AccessToken)@grahamsio.visualstudio.com/CN%20Website/_git/Hubspot"
+  WORKDIR:           "$(Agent.TempDirectory)\repo"
+
+stages:
+  - stage: SyncAllThemes
+    displayName: Sync All HubSpot Themes
+    jobs:
+      - job: Sync
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - checkout: none
+
+          # Install Node.js for npm
+          - task: NodeTool@0
+            displayName: Install Node.js 20.x
+            inputs:
+              versionSpec: '20.x'
+
+          - task: PowerShell@2
+            displayName: Fetch & Push All Themes
+            inputs:
+              targetType: inline
+              script: |
+                Install-Module powershell-yaml -Scope CurrentUser -Force -AllowClobber
+                Import-Module powershell-yaml
+                $WORKDIR = Join-Path $env:BUILD_SOURCESDIRECTORY 'temp-repo'
+
+                # list your three themes here
+                $themes = @(
+                  'Code Ninja - Marketing Website',
+                  'DEV',
+                  'CN TEAM'
+                )
+
+                foreach ($themeName in $themes) {
+                  Write-Host "`n--- Processing $themeName ---"
+
+                  $safeName = $themeName.ToLower() -replace '[^a-z0-9]', '-' -replace '-+', '-'
+                  $safeName = $safeName.Trim('-')
+                  $branchName = "theme-$safeName"
+
+                  # Generate safe folder name by replacing slashes and illegal path characters with underscores
+                  $folderSafeName = $themeName -replace '[\/:*?"<>|]', '_' -replace '\s+', '_' -replace '_+', '_'
+
+                  # Clone the repo fresh
+                  if (Test-Path $WORKDIR) { Remove-Item -Recurse -Force $WORKDIR }
+                  git clone $env:REPO_URL $WORKDIR
+                  Set-Location $WORKDIR
+
+                  git checkout -B $branchName
+
+                  # install and configure HubSpot CLI
+                  npm install -g @hubspot/cli
+                  $cfgDir = Join-Path $env:USERPROFILE '.hubspotcli'
+                  if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Path $cfgDir -Force > $null }
+                  $cfg = @{
+                    defaultPortal = $env:HUBSPOT_PORTAL_ID
+                    portals       = @(@{
+                      name               = $env:HUBSPOT_PORTAL_ID
+                      portalId           = $env:HUBSPOT_PORTAL_ID
+                      personalAccessKey  = $env:HUBSPOT_PAT
+                    })
+                  }
+                  $cfg | ConvertTo-Yaml | Out-File (Join-Path $cfgDir 'hubspot.config.yml') -Encoding utf8
+
+                  # fetch theme into themes/<SafeFolderName>
+                  $dest = Join-Path $env:WORKDIR "themes\$folderSafeName"
+                  $parent = Split-Path $dest -Parent
+                  if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force > $null }
+                  hs fetch $themeName $dest --overwrite
+
+                  # commit & push if needed
+                  git add "themes\$folderSafeName"
+                  if (-not (git diff --cached --quiet)) {
+                    git config user.name  'AutomatedBuild'
+                    git config user.email 'build@yourdomain.com'
+                    git commit -m "Sync HubSpot theme '$themeName' → $branch"
+                    git push origin "HEAD:$branch"
+                  } else {
+                    Write-Host "No changes for '$themeName'."
+                  }
+
+                  Pop-Location
+                }
+            env:
+              HUBSPOT_PAT:        $(HUBSPOT_PAT)
+              HUBSPOT_PORTAL_ID:  $(HUBSPOT_PORTAL_ID)
+              REPO_URL:           $(REPO_URL)
+              WORKDIR:            $(WORKDIR)
+              System_AccessToken: $(System.AccessToken)
