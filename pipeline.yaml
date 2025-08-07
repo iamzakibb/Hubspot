@@ -70,8 +70,10 @@ stages:
                   $cfg | ConvertTo-Yaml | Out-File (Join-Path $cfgDir 'hubspot.config.yml') -Encoding utf8
 
                   # fetch theme into themes/<SafeFolderName>
-                  $dest = Join-Path $env:WORKDIR "themes\$folderSafeName"
-                  $parent = Split-Path $dest -Parent
+                  $themesDir = Join-Path $WORKDIR "themes"
+                  $dest = Join-Path $themesDir $folderSafeName
+                  $parent = Split-Path -Path $dest -Parent
+
                   if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force > $null }
                   hs fetch $themeName $dest --overwrite
 
