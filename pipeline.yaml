@@ -30,6 +30,7 @@ stages:
               script: |
                 # ensure hs can run
                 npm install -g @hubspot/cli
+                Write-Host "Installed HubSpot CLI "
                 Install-Module powershell-yaml -Scope CurrentUser -Force -AllowClobber
                 Import-Module powershell-yaml
 
