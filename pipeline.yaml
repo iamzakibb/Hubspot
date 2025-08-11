@@ -2,7 +2,7 @@ trigger: none
 
 variables:
   HUBSPOT_PAT:       $(HUBSPOT_PERSONAL_ACCESS_KEY)
-  HUBSPOT_PORTAL_ID: "39646145"
+  HUBSPOT_PORTAL_ID: ""
   REPO_URL:          "https://$(System.AccessToken)@grahamsio.visualstudio.com/CN%20Website/_git/Hubspot"
   WORKDIR:           "$(Agent.TempDirectory)\repo"
 
@@ -22,189 +22,144 @@ stages:
               versionSpec: '20.x'
 
           - task: PowerShell@2
-            displayName: Fetch & Push All Themes (no masking, include personalAccessKey)
+            displayName: Fetch & Push All Themes (create YAML using ConvertTo-Yaml)
             inputs:
               targetType: inline
               script: |
-                # Read pipeline-provided variables (must be defined in pipeline variables)
-                $portalId = $env:HUBSPOT_PORTAL_ID
-                $pat = $env:HUBSPOT_PAT
-                $token = $env:SYSTEM_ACCESSTOKEN
-                $repoRoot = $env:BUILD_SOURCESDIRECTORY
+                  
+                  $portalId = $env:HUBSPOT_PORTAL_ID
+                  $pat      = $env:HUBSPOT_PAT
+                  $token    = $env:SYSTEM_ACCESSTOKEN
+                  $repoRoot = $env:BUILD_SOURCESDIRECTORY
 
-                if (-not $portalId) { Write-Error "HUBSPOT_PORTAL_ID missing"; exit 1 }
-                if (-not $repoRoot)  { Write-Error "BUILD_SOURCESDIRECTORY missing"; exit 1 }
-                if (-not $pat)       { Write-Warning "HUBSPOT_PAT missing or empty; hs will fail" }
+                  if (-not $portalId) { Write-Error "HUBSPOT_PORTAL_ID missing"; exit 1 }
+                  if (-not $repoRoot)  { Write-Error "BUILD_SOURCESDIRECTORY missing"; exit 1 }
+                  if (-not $pat)       { Write-Error "HUBSPOT_PAT missing"; exit 1 }  # Changed to error
 
-                # Ensure HubSpot CLI is installed (best-effort)
-                try {
-                  npm install -g @hubspot/cli 2>&1 | Write-Host
-                  Write-Host "Attempted npm install -g @hubspot/cli"
-                } catch {
-                  Write-Warning ("npm install -g @hubspot/cli failed: {0}" -f $_.Exception.Message)
-                }
-                try { hs --version 2>&1 | Write-Host } catch { Write-Warning "hs --version not available" }
+                  # ---- install & import YAML module ----
+                  try {
+                      Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+                      Import-Module powershell-yaml -ErrorAction Stop
+                  } catch {
+                      Write-Error "Could not install/import powershell-yaml: $($_.Exception.Message)"
+                      exit 1
+                  }
 
-                $themes = @('Code Ninja - Marketing Website','DEV','CN TEAM')
+                  # ---- Create modern CLI configuration ----
+                  $configDir = Join-Path $env:USERPROFILE ".hscli"
+                  if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
+                  $configFile = Join-Path $configDir "config.yml"
 
-                foreach ($themeName in $themes) {
-                  Write-Host "`n=== Processing theme: $themeName ==="
-
-                  # safe folder + branch names (use underscores)
-                  $folderSafe = $themeName -replace '[\/:*?"<>|]', '_' -replace '\s+', '_' -replace '_+', '_'
-                  $folderSafe = $folderSafe.Trim('_')
-                  $branchName = "theme_$($folderSafe.ToLower())"
-
-                  Write-Host ("Branch: {0}" -f $branchName)
-                  Write-Host ("Folder-safe name: {0}" -f $folderSafe)
-
-                  # Build config content (legacy hubspot.config.yml and new .hscli config)
-                  $legacyYaml = "defaultPortal: {0}`nportals:`n  - name: {0}`n    portalId: {0}`n    personalAccessKey: {1}`n" -f $portalId, $pat
-
-                  # New-style config with accountId and top-level personalAccessKey (added to satisfy CLI validation)
-                  $hscliYaml = ("defaultAccount: {0}`naccounts:`n  - accountId: {0}`n    id: {0}`n    portalId: {0}`n    personalAccessKey: {1}`n    authType: personalaccesskey`n    auth:`n      personalAccessKey: {1}`n") -f $portalId, $pat
-
-                  # Candidate base dirs to write configs to (USERPROFILE, HOME, repo root)
-                  $bases = @()
-                  if ($env:USERPROFILE -and $env:USERPROFILE.Trim()) { $bases += $env:USERPROFILE }
-                  if ($env:HOME -and $env:HOME.Trim()) { $bases += $env:HOME }
-                  if ($repoRoot -and $repoRoot.Trim()) { $bases += $repoRoot }
-                  $bases = $bases | Get-Unique
-
-                  $wroteAny = $false
-                  foreach ($base in $bases) {
-                    if (-not $base) { continue }
-                    try {
-                      $tHubspot     = Join-Path $base 'hubspot.config.yml'
-                      $tHubspotCli  = Join-Path $base '.hubspotcli\hubspot.config.yml'
-                      $tHscli       = Join-Path $base '.hscli\config.yml'
-                      $targets = @($tHubspot, $tHubspotCli, $tHscli) | Get-Unique
-
-                      foreach ($t in $targets) {
-                        try {
-                          $tDir = Split-Path -Path $t -Parent
-                          if (-not (Test-Path $tDir)) { New-Item -ItemType Directory -Path $tDir -Force | Out-Null }
-
-                          if ($t -like '*\.hscli\*' -or $t -like '*\.hscli*') {
-                            # write new global hscli config with accountId + personalAccessKey
-                            $hscliYaml | Out-File -FilePath $t -Encoding utf8 -Force
-                          } else {
-                            # write legacy hubspot.config.yml
-                            $legacyYaml | Out-File -FilePath $t -Encoding utf8 -Force
+                  # Create secure configuration using PAT
+                  $secureCfg = @{
+                      defaultAccount = $portalId
+                      accounts = @(
+                          @{
+                              accountId = $portalId
+                              name = $portalId
+                              portalId = $portalId
+                              authType = 'personalaccesskey'
+                              auth = @{
+                                  personalAccessKey = $pat
+                              }
                           }
+                      )
+                  }
 
-                          Start-Sleep -Milliseconds 150
-                          if (Test-Path $t) {
-                            Write-Host ("Wrote config to: {0}" -f $t)
-                            $wroteAny = $true
-                          }
-                        } catch {
-                          Write-Warning ("Failed to write config to {0}: {1}" -f $t, $_.Exception.Message)
-                        }
+                  $yamlText = ConvertTo-Yaml -Data $secureCfg
+                  $yamlText | Out-File -FilePath $configFile -Encoding utf8 -Force
+                  Write-Host "Created secure CLI configuration at $configFile"
+
+                  # ---- ensure HubSpot CLI installed ----
+                  try {
+                      npm install -g @hubspot/cli 2>&1 | Write-Host
+                      Write-Host "HubSpot CLI installed"
+                  } catch {
+                      Write-Error "npm install failed: $($_.Exception.Message)"
+                      exit 1
+                  }
+
+                  # Verify CLI installation
+                  try { 
+                      $version = hs --version
+                      Write-Host "HubSpot CLI version: $version"
+                  } catch { 
+                      Write-Error "hs command not available"
+                      exit 1
+                  }
+
+                  # ---- Process themes ----
+                  $themes = @('Code Ninja - Marketing Website','DEV','CN TEAM')
+
+                  foreach ($themeName in $themes) {
+                      Write-Host "`n=== Processing theme: $themeName ==="
+
+                      # Safe folder + branch names
+                      $folderSafe = $themeName -replace '[\/:*?"<>|]', '_' -replace '\s+', '_' -replace '_+', '_'
+                      $folderSafe = $folderSafe.Trim('_')
+                      $branchName = "theme_$($folderSafe.ToLower())"
+
+                      Write-Host "Branch: $branchName"
+                      Write-Host "Folder-safe name: $folderSafe"
+
+                      # Prepare themes directory
+                      $themesDir = Join-Path $repoRoot 'themes'
+                      if (-not (Test-Path $themesDir)) { 
+                          New-Item -ItemType Directory -Path $themesDir -Force | Out-Null 
                       }
 
-                      if ($wroteAny) { break }
-                    } catch {
-                      Write-Warning ("Base write attempt failed for {0}: {1}" -f $base, $_.Exception.Message)
-                    }
-                  }
+                      # Create destination folder
+                      $dest = Join-Path $themesDir $folderSafe
+                      if (-not (Test-Path $dest)) { 
+                          New-Item -ItemType Directory -Path $dest -Force | Out-Null 
+                      }
 
-                  if (-not $wroteAny) {
-                    Write-Warning ("No hubspot config written for {0}; skipping." -f $themeName)
-                    continue
-                  }
+                      Write-Host "Fetching theme into: $dest"
 
-                  # Preview created config files (UNMASKED - will show PAT)
-                  $previewList = @()
-                  if ($env:USERPROFILE -and (Test-Path $env:USERPROFILE)) {
-                    $previewList += Join-Path $env:USERPROFILE 'hubspot.config.yml'
-                    $previewList += Join-Path $env:USERPROFILE '.hubspotcli\hubspot.config.yml'
-                    $previewList += Join-Path $env:USERPROFILE '.hscli\config.yml'
-                  }
-                  if ($repoRoot -and (Test-Path $repoRoot)) {
-                    $previewList += Join-Path $repoRoot 'hubspot.config.yml'
-                    $previewList += Join-Path $repoRoot '.hubspotcli\hubspot.config.yml'
-                    $previewList += Join-Path $repoRoot '.hscli\config.yml'
-                  }
-                  $previewList = $previewList | Get-Unique
-
-                  foreach ($pf in $previewList) {
-                    if (Test-Path $pf) {
+                      # Run hs fetch with explicit authentication
                       try {
-                        $content = Get-Content -Path $pf -Raw -ErrorAction Stop
-                        $preview = ($content -split "`n" | Select-Object -First 40) -join "`n"
-                        Write-Host ("--- Config preview: {0} ---`n{1}`n--- end preview ---" -f $pf, $preview)
+                          Write-Host "Running: hs fetch `"$themeName`" `"$dest`" --overwrite --account $portalId"
+                          $hsOutput = hs fetch "$themeName" "$dest" --overwrite --account $portalId 2>&1
+                          Write-Host $hsOutput
+                          
+                          if ($LASTEXITCODE -ne 0) {
+                              throw "hs fetch failed with exit code $LASTEXITCODE"
+                          }
                       } catch {
-                        Write-Warning ("Could not read preview for {0}: {1}" -f $pf, $_.Exception.Message)
+                          Write-Error "hs fetch failed: $($_.Exception.Message)"
+                          continue
                       }
-                    }
-                  }
 
-                  # determine destination (prefer original theme folder name, fallback to safe one)
-                  $themesDir = Join-Path $repoRoot 'themes'
-                  if (-not (Test-Path $themesDir)) { New-Item -ItemType Directory -Path $themesDir -Force | Out-Null }
-                  $destOriginal = Join-Path $themesDir $themeName
-                  $destSafe = Join-Path $themesDir $folderSafe
-                  $dest = $null
-                  try {
-                    if (-not (Test-Path $destOriginal)) { New-Item -ItemType Directory -Path $destOriginal -Force | Out-Null }
-                    $dest = $destOriginal
-                  } catch {
-                    Write-Warning ("Cannot create original-named folder: {0}. Falling back to safe folder." -f $_.Exception.Message)
-                    if (-not (Test-Path $destSafe)) { New-Item -ItemType Directory -Path $destSafe -Force | Out-Null }
-                    $dest = $destSafe
-                  }
+                      # Verify files were downloaded
+                      if (-not (Get-ChildItem -Path $dest -File -Recurse -ErrorAction SilentlyContinue)) {
+                          Write-Warning "No files found in $dest after hs fetch"
+                          continue
+                      }
 
-                  Write-Host ("Fetching theme into: {0}" -f $dest)
+                      # Git operations
+                      Push-Location $repoRoot
+                      try {
+                          git checkout -B $branchName 2>&1 | Write-Host
 
-                  # Run hs fetch (capture output)
-                  $hsOutput = $null
-                  try {
-                    $hsOutput = hs fetch "$themeName" "$dest" --overwrite 2>&1
-                    Write-Host $hsOutput
-                  } catch {
-                    Write-Warning ("hs fetch threw for '{0}': {1}" -f $themeName, $_.Exception.Message)
-                    continue
-                  }
+                          # Set remote URL with token
+                          if ($token) {
+                              $authUrl = "https://$token@grahamsio.visualstudio.com/CN%20Website/_git/Hubspot"
+                              git remote set-url origin $authUrl 2>&1 | Write-Host
+                          }
 
-                  # If CLI printed validation/no-config messages, show them
-                  if ($hsOutput -and ($hsOutput -match '(?i)validation failed' -or $hsOutput -match '(?i)valiation failed' -or $hsOutput -match '(?i)no config' -or $hsOutput -match '(?i)missing a "personalAccessKey"')) {
-                    Write-Warning ("hs fetch output for '{0}': {1}" -f $themeName, ($hsOutput -join "`n"))
-                  }
+                          git add "themes/$folderSafe" 2>&1 | Write-Host
 
-                  # verify files exist
-                  $files = Get-ChildItem -Path $dest -Recurse -File -ErrorAction SilentlyContinue
-                  if (-not $files -or $files.Count -eq 0) {
-                    Write-Warning ("No files found in {0} after hs fetch. Skipping commit for '{1}'." -f $dest, $themeName)
-                    continue
-                  }
-
-                  # Git commit & push (non-interactive)
-                  Push-Location $repoRoot
-                  try {
-                    git checkout -B $branchName 2>&1 | Write-Host
-
-                    if ($token -and $token.Trim()) {
-                      $authUrl = "https://$token@grahamsio.visualstudio.com/CN%20Website/_git/Hubspot"
-                      Write-Host "Setting origin to tokenized URL for non-interactive push..."
-                      git remote set-url origin "$authUrl" 2>&1 | Write-Host
-                    } else {
-                      Write-Warning "SYSTEM_ACCESSTOKEN not present; push may fail."
-                    }
-
-                    git add ("themes/" + (Split-Path -Path $dest -Leaf)) 2>&1 | Write-Host
-
-                    if (-not (git diff --cached --quiet)) {
-                      git config user.name 'AutomatedBuild'
-                      git config user.email 'build@yourdomain.com'
-                      git commit -m ("Sync HubSpot theme '{0}' → {1}" -f $themeName, $branchName) 2>&1 | Write-Host
-                      & git push origin ("HEAD:" + $branchName) 2>&1 | Write-Host
-                    } else {
-                      Write-Host ("No changes detected for '{0}'." -f $themeName)
-                    }
-                  } catch {
-                    Write-Warning ("Git operations failed for '{0}': {1}" -f $themeName, $_.Exception.Message)
-                  } finally {
-                    Pop-Location
-                  }
-                } # end foreach theme
+                          if (-not (git diff --cached --quiet)) {
+                              git config user.name 'AutomatedBuild'
+                              git config user.email 'build@yourdomain.com'
+                              git commit -m "Sync HubSpot theme '$themeName' → $branchName" 2>&1 | Write-Host
+                              git push origin "HEAD:$branchName" 2>&1 | Write-Host
+                          } else {
+                              Write-Host "No changes detected for '$themeName'"
+                          }
+                      } catch {
+                          Write-Error "Git operations failed: $($_.Exception.Message)"
+                      } finally {
+                          Pop-Location
+                      }
+                  } # end foreach theme

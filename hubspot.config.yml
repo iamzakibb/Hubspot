@@ -1,0 +1,14 @@
+defaultPortal: Jeevan
+portals:
+  - name: Jeevan
+    portalId: 39646145
+    env: prod
+    authType: personalaccesskey
+    auth:
+      tokenInfo:
+        accessToken: >-
+          COLFwsOJMxIfQlNQMl8kQEwrAhIACAkCARMcAQIBEAMKAQIDBxsDARjB5_MSIOTZ8R8o7ukMMhTf5xb28-tvU04_992D2Tn7BqCf-To8QlNQMl8kQEwrAi8ACBMGBh0BAQFRKxwBAQEBKAEBAQgBBgIUBA8BCAQBAQEBAQQBBQESCQMBMQENAUlaQhRr_0yawFubJK7Ev09zSGLQVasoS0oDbmExUgBaAGABaABwAHgA
+        expiresAt: '2025-08-11T09:22:55.404Z'
+    accountType: STANDARD
+    personalAccessKey: >-
+      CiRjYmQ4YmZhOC1hZTJiLTQyYzktYmI1Yy1hNzE1YmQ3YTJiMDMQwefzEhjk2fEfKhkABeaRgtlcF-brQJwSLBvnIZi0wofb3tJ8SgNuYTE

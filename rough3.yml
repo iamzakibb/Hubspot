@@ -1,0 +1,169 @@
+trigger: none
+
+variables:
+  HUBSPOT_PAT:       $(HUBSPOT_PERSONAL_ACCESS_KEY)
+  HUBSPOT_PORTAL_ID: ""
+  REPO_URL:          "https://$(System.AccessToken)@grahamsio.visualstudio.com/CN%20Website/_git/Hubspot"
+  WORKDIR:           "$(Agent.TempDirectory)\repo"
+
+stages:
+  - stage: SyncAllThemes
+    displayName: Sync All HubSpot Themes
+    jobs:
+      - job: Sync
+        pool:
+          vmImage: 'windows-latest'
+        steps:
+          - checkout: self
+
+          - task: NodeTool@0
+            displayName: Install Node.js 20.x
+            inputs:
+              versionSpec: '20.x'
+
+          - task: PowerShell@2
+            displayName: Fetch & Push All Themes (create YAML using ConvertTo-Yaml)
+            inputs:
+              targetType: inline
+              script: |
+                $portalId = $env:HUBSPOT_PORTAL_ID
+                $pat      = $env:HUBSPOT_PAT
+                $token    = $env:SYSTEM_ACCESSTOKEN
+                $repoRoot = $env:BUILD_SOURCESDIRECTORY
+
+                if (-not $portalId) { Write-Error "HUBSPOT_PORTAL_ID missing"; exit 1 }
+                if (-not $repoRoot)  { Write-Error "BUILD_SOURCESDIRECTORY missing"; exit 1 }
+                if (-not $pat)       { Write-Error "HUBSPOT_PAT missing"; exit 1 }
+
+                # ---- Create modern CLI configuration ----
+                $configDir = Join-Path $env:USERPROFILE ".hscli"
+                if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
+                $configFile = Join-Path $configDir "config.yml"
+
+                # Create secure configuration using PAT - FIXED FORMAT
+                @"
+                defaultAccount: $portalId
+                accounts:
+                  - accountId: $portalId
+                    name: $portalId
+                    portalId: $portalId
+                    authType: personalaccesskey
+                    auth:
+                      personalAccessKey: "$pat"
+                "@ | Out-File -FilePath $configFile -Encoding utf8 -Force
+
+                Write-Host "Created secure CLI configuration at $configFile"
+
+                # Debug: Show masked config
+                try {
+                    $configContent = Get-Content $configFile -Raw
+                    $maskedConfig = $configContent -replace [regex]::Escape($pat), '***REDACTED_PAT***'
+                    Write-Host "HubSpot CLI Configuration (masked):`n$maskedConfig"
+                } catch {
+                    Write-Warning "Failed to read config file for debugging"
+                }
+
+                # ---- Install HubSpot CLI ----
+                Write-Host "Installing HubSpot CLI..."
+                npm install -g @hubspot/cli --loglevel=error 2>&1 | ForEach-Object {
+                    if ($_ -match "ERR!") {
+                        Write-Error $_
+                    } else {
+                        Write-Host $_
+                    }
+                }
+
+                # Verify installation
+                try { 
+                    $version = hs --version
+                    Write-Host "HubSpot CLI version: $version"
+                } catch { 
+                    Write-Error "HubSpot CLI not installed: $($_.Exception.Message)"
+                    exit 1
+                }
+
+                # Verify authentication
+                Write-Host "Verifying authentication..."
+                hs auth status --account $portalId
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Error "Authentication verification failed for account $portalId"
+                    exit 1
+                }
+
+                # ---- Process themes ----
+                $themes = @('Code Ninja - Marketing Website','DEV','CN TEAM')
+
+                foreach ($themeName in $themes) {
+                    Write-Host "`n=== Processing theme: $themeName ==="
+
+                    # Safe folder + branch names
+                    $folderSafe = $themeName -replace '[\/:*?"<>|]', '_' -replace '\s+', '_' -replace '_+', '_'
+                    $folderSafe = $folderSafe.Trim('_')
+                    $branchName = "theme_$($folderSafe.ToLower())"
+
+                    Write-Host "Branch: $branchName"
+                    Write-Host "Folder-safe name: $folderSafe"
+
+                    # Prepare themes directory
+                    $themesDir = Join-Path $repoRoot 'themes'
+                    if (-not (Test-Path $themesDir)) { 
+                        New-Item -ItemType Directory -Path $themesDir -Force | Out-Null 
+                    }
+
+                    # Create destination folder
+                    $dest = Join-Path $themesDir $folderSafe
+                    if (-not (Test-Path $dest)) { 
+                        New-Item -ItemType Directory -Path $dest -Force | Out-Null 
+                    }
+
+                    Write-Host "Fetching theme into: $dest"
+
+                    # Run hs fetch with explicit authentication
+                    try {
+                        Write-Host "Running: hs fetch `"$themeName`" `"$dest`" --overwrite --account $portalId"
+                        $hsOutput = hs fetch "$themeName" "$dest" --overwrite --account $portalId 2>&1
+                        Write-Host $hsOutput
+                        
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "hs fetch failed with exit code $LASTEXITCODE"
+                        }
+                        
+                        # Verify files were downloaded
+                        $fileCount = (Get-ChildItem -Path $dest -File -Recurse -ErrorAction SilentlyContinue).Count
+                        if (-not $fileCount -or $fileCount -eq 0) {
+                            throw "No files found in $dest after hs fetch"
+                        }
+                        Write-Host "Downloaded $fileCount files successfully"
+                    } catch {
+                        Write-Error "Theme fetch failed: $($_.Exception.Message)"
+                        continue
+                    }
+
+                    # Git operations
+                    Push-Location $repoRoot
+                    try {
+                        git checkout -B $branchName 2>&1 | Write-Host
+
+                        # Set remote URL with token
+                        if ($token) {
+                            $authUrl = "https://$token@grahamsio.visualstudio.com/CN%20Website/_git/Hubspot"
+                            git remote set-url origin $authUrl 2>&1 | Write-Host
+                        }
+
+                        git add "themes/$folderSafe" 2>&1 | Write-Host
+
+                        if (-not (git diff --cached --quiet)) {
+                            git config user.name 'AutomatedBuild'
+                            git config user.email 'build@yourdomain.com'
+                            git commit -m "Sync HubSpot theme '$themeName' → $branchName" 2>&1 | Write-Host
+                            git push origin "HEAD:$branchName" 2>&1 | Write-Host
+                            Write-Host "Successfully pushed changes to $branchName"
+                        } else {
+                            Write-Host "No changes detected for '$themeName'"
+                        }
+                    } catch {
+                        Write-Error "Git operations failed: $($_.Exception.Message)"
+                    } finally {
+                        Pop-Location
+                    }
+                } # end foreach theme
