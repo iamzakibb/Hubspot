@@ -1,7 +1,7 @@
 defaultPortal: Jeevan
 portals:
   - name: Jeevan
-    portalId: 39646145
+    portalId: 
     env: prod
     authType: personalaccesskey
     auth:
@@ -11,4 +11,3 @@ portals:
         expiresAt: '2025-08-11T09:22:55.404Z'
     accountType: STANDARD
     personalAccessKey: >-
-      
