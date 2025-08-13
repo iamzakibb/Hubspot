@@ -1,22 +1,15 @@
 
-
-# === CONFIGURE THESE VARIABLES ===
-# Your Azure DevOps OAuth or PAT which can access the repo:
 $systemAccessToken = ''  
 
-# Your HubSpot Personal Access Token:
-#$hubspotPat        = ''
-
-# Your HubSpot portal ID (e.g. 39646145):
-$hubspotPortalId   = ''
-
-# The HubSpot theme folder name to fetch (e.g. 'DEV'):
 $themeName         = 'DEV'
 
-# The Git branch you want to sync into (will be created if missing):
-$branchName        = 'theme-dev'
+$safeName = $themeName.ToLower() `
+  -replace '[^a-z0-9]', '-' `
+  -replace '-+', '-'
+$safeName = $safeName.Trim('-')
 
-# ---------------------- end config ----------------------
+$branchName     = "theme-$safeName"
+
 
 # Paths
 $localRepoPath = Join-Path (Get-Location) 'repo'
